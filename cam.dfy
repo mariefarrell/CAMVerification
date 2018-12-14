@@ -8,16 +8,29 @@
 
 
 datatype CAM = CAM(id:int,seqno:int, time:int, heading:int, speed:int, position:int)
+// Min and Max CAM generation times in ms
+const T_GenCamMin := 100;
+const T_GenCamMax := 1000;
+
+const N_GenCamDefault := 3;
+const N_GenCamMax := 3;
+
+// Thresholds
+const headingthreshold := 4;
+const speedthreshold := 4;
+const posthreshold := 0.5 as real;
+
+const MaxTime := 5000; // How many ms to run simulation for
+
 //Main method to get everything going
 method Main()
 {
   var carNo := 10;
-  var SleepInterval := 3;
-  var TxInterval := 5;
+  var T_CheckCamGen := 10; // Every 10ms
+  var T_GenCam_DCC := 500; // Every 500ms, minimum time interval between two consecutive CAM generations 
   var c := 0;
   
-  //for receive
-  
+  //for testing  
   var prev := new CAM [3];
   prev[0] := CAM(1,0,1,2,3,4);//for testing
   prev[1] := CAM(1,1,2,3,4,5);
@@ -32,32 +45,47 @@ method Main()
   }
   
 }
-method sendCAM(SleepInterval:int, TxInterval:int, j:int) returns (msgs:seq<CAM>)
-  requires SleepInterval <= TxInterval;
-  requires TxInterval > 0 && TxInterval <= 10;
+
+method sendCAM(T_CheckCamGen:int, T_GenCam_DCC:int, j:int) returns (msgs:seq<CAM>)
+  requires 0 < T_CheckCamGen <= T_GenCamMin;
+  requires T_GenCamMin <= T_GenCam_DCC <= T_GenCamMax;
+  requires T_GenCam_DCC>0;
+
+  //At least one CAM is sent for every TxInterval
+  ensures |msgs|>=1; // at least one cam is sent
+  ensures MaxTime/T_GenCam_DCC <= |msgs|;
   
-  //One CAM is sent for every TxInterval
-  ensures TxInterval >= 1 ==> |msgs| >= TxInterval; //This is the Availability property from CIA
 {
+  var T_GenCam := T_GenCamMax; // currently valid upper limit of the CAM generation interval
+  var N_GenCam := N_GenCamDefault; 
+  var trigger_two_count := 0;
+  
   var LastBroadcast := 0;
+  var LastBroadcastDiff := 0;
   var seqno := 0;
   var prevheading, prevspeed, prevpos;
-  var now, heading, speed, pos;
+  var now, heading, speed, pos := 0,0,0,0;
   
-  var headingthreshold, speedthreshold := 4,4;
-  var posthreshold := 0.5 as real;
-  var i := 0;
-  msgs := [];
-  var headingchanged:bool, speedchanged:bool, poschanged: bool := false, false, false;
   
-  while(i < 100)
-  decreases 100 - i;
-  // These invariants say that a CAM is sent if the change in a value is above some interval
-  invariant  headingchanged || speedchanged || poschanged || (now - LastBroadcast >= TxInterval && |msgs| >0)  ==> CAM(j,seqno,now,heading,speed,pos) in msgs;
-  invariant |msgs| >= i/TxInterval;
-  {
+  msgs := [CAM(j,seqno,now,heading,speed,pos)]; // send an initial cam
+  
+  var headingold:bool, speedold:bool, posold: bool := false, false, false;
+  
+  var t := 0;
+  assert |msgs| >=1;
+  while(t < MaxTime)
+  decreases MaxTime-t;
+  invariant |msgs|>=1;
+  invariant LastBroadcastDiff >= T_GenCam_DCC && (headingold || speedold || posold || (LastBroadcastDiff >= T_GenCam_DCC && |msgs|>=1 ))  ==> CAM(j,seqno,now,heading,speed,pos) in msgs;
+  invariant t/T_GenCamMin >= 1 ==> |msgs| >= t/T_GenCamMin;
+  invariant t/T_GenCamMax >= 1 ==> |msgs| >= t/T_GenCamMax;
+  invariant trigger_two_count > 0 && LastBroadcastDiff >= T_GenCam_DCC && LastBroadcastDiff >= T_GenCam &&  t/T_GenCamMax >= 1 ==> |msgs| >= t/T_GenCamMax;
+  invariant 0 <= N_GenCam <= N_GenCamMax;
+  
+  { 
     //Get the current time
-    now := Now();
+    now := t;
+    LastBroadcastDiff := now - LastBroadcast;
     
     //Get vehicle information
     heading := GetHeading();
@@ -65,38 +93,43 @@ method sendCAM(SleepInterval:int, TxInterval:int, j:int) returns (msgs:seq<CAM>)
     pos := GetPosition();
     
     //Check if this information has changed
-    headingchanged := abs(heading - prevheading) >= headingthreshold;
-    speedchanged := abs(speed - prevspeed)>=speedthreshold;
-    poschanged := abs(pos - prevpos)>=posthreshold.Floor;
+    headingold := abs(heading - prevheading) >= headingthreshold;
+    speedold := abs(speed - prevspeed) >= speedthreshold;
+    posold := abs(pos - prevpos) >= posthreshold.Floor;
+    
     //If any information has changed, or a CAM hasn't been sent recently, then send a CAM
-    if(headingchanged||speedchanged||poschanged||(now - LastBroadcast >= TxInterval)){
-      seqno := (seqno + 1) % 256; //seqno is an 8 bit integer
+    if(LastBroadcastDiff >= T_GenCam_DCC || (headingold || speedold || posold || LastBroadcastDiff >= T_GenCam)){
+      seqno := (seqno + 1) % 256;
       msgs := msgs + [CAM(j,seqno,now,heading,speed,pos)];
       LastBroadcast := now;
+      
+      if ((headingold || speedold || posold)) { // Trigger 1
+        T_GenCam := LastBroadcastDiff;
+        trigger_two_count := 0; // Reset
+      }
+      else if (LastBroadcastDiff >= T_GenCam){ // Trigger 2
+        trigger_two_count := trigger_two_count + 1;
+        if (trigger_two_count == N_GenCam) {
+          T_GenCam := T_GenCamMax;
+          
+       }
+       
+     }
+     
       //Set current values as old values
       prevheading := heading;
       prevspeed := speed;
       prevpos := pos;
-    }
-    Sleep(SleepInterval);
-    i := i + 1;
+    }   
+    t := t + T_CheckCamGen; // Sleep for a bit to advance time
  }
  return msgs;
 }
 
-//idea: CAMS are uploaded to a sequence and their index matches their id 
 method receiveCAM(fromid:int, cams:seq<CAM>) returns ()
 requires 0 <= fromid < |cams|;
 requires fromid == cams[fromid].id;  //To check that the vehicle the message claims it was sent from was actually sent from that vehicle.
 {
-  //var prev':= cams[fromid];
-  //cams[fromid] := CAM(fromid,seqno,t, heading, speed, pos);
-
-  //if(seqno <= prev'.seqno || hasOverflowed(seqno, prev'.seqno))
-  //{ 
-    //Skip previously received messages, don't expect this to happen. Needed to prevent replay attacks
-  //}
-
   if(Sign(Magnitude(cams[fromid].heading)) == - Sign(Magnitude(GetHeading())))
   {
     //Ignore cars travelling in the opposite direction to us
@@ -128,9 +161,9 @@ function method GetSpeed():int
   50
 }
 
-method GetPosition() returns (p:int)
+function method GetPosition():int
 {
-  
+  10
 }
 
 function method abs(x: int): int
@@ -138,26 +171,26 @@ function method abs(x: int): int
    if x < 0 then -x else x
 }
 
+function method Magnitude(heading:int):int{
+  heading
+}
 
-method Sleep(SleepInterval:int) returns ()
-{}
 
+method Sleep(period:int) returns ()
+{
+  
+}
 
 function method hasOverflowed(s1:int, s2:int): bool{
   s1>s2
 }
 
-function method Sign(magnitude:int):int{
-  magnitude
-}
-
-function method Magnitude(heading:int):int{
-  heading
+function method Sign(x:int):int{
+  if x < 0 then -1 else 1
 }
 
 method Brake(s:int)  returns (deceleration:int)
 ensures 0<= deceleration <= 10; // 10 should be 9.81 but left it as 10 so that I could use ints for simplicity 
 { 
   deceleration := 8;
-
 }
