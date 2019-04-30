@@ -7,7 +7,8 @@
 //CAM messages are intended for all that receive them so proving Confidentiality is unnecessary
 
 
-datatype CAM = CAM(id:int,seqno:int, time:int, heading:int, speed:int, position:int)
+datatype CAM = CAM(id:int, time:int, heading:int, speed:int, position:int)
+datatype Car = Car(id:int, start:int, end:int, speed:int)
 //Main method to get everything going
 
 // Min and Max CAM generation times in ms
@@ -23,30 +24,30 @@ const speedthreshold := 4;
 const posthreshold := 0.5 as real;
 
 const MaxMsgs := 100; // Max number of messages to verify for
-
+ 
+ //travel between pointA and pointB
+const pointA := 0;
+const pointB := 100;
 method Main()
 {
-  var carNo := 10;
+  var carNo := 3; //same as promela model
   var SleepInterval := 3;
   var TxInterval := 5;
   var c := 0;
   
   //for receive
-  
-  var prev := new CAM [3];
-  prev[0] := CAM(1,0,1,2,3,4);//for testing
-  prev[1] := CAM(1,1,2,3,4,5);
-  prev[2] := CAM(1,2,3,4,5,6);
 
-  while(c<carNo)
-  decreases carNo - c;
-  {
-     //var res := sendCAM(SleepInterval, TxInterval,c);
-     c:= c+1;  
-     //print res; 
-  }
-  
+  var prev := new CAM [3];
+  prev[0] := CAM(1,1,2,3,4);//for testing
+  prev[1] := CAM(1,2,3,4,5);
+  prev[2] := CAM(1,3,4,5,6);
+
+//Three cars
+  var car1 := Car(1,0,100,4);  
+  var car2 := Car(2,0,100, 4);
+  var car3 := Car(3,0,100,4);
 }
+
 method sendCAM(T_CheckCamGen:int, T_GenCam_DCC:int, j: int) returns (msgs:seq<CAM>, now:int)
   requires 0 < T_CheckCamGen <= T_GenCamMin;
   requires T_GenCamMin <= T_GenCam_DCC <= T_GenCamMax;
@@ -63,10 +64,10 @@ method sendCAM(T_CheckCamGen:int, T_GenCam_DCC:int, j: int) returns (msgs:seq<CA
   now := 0;
   var LastBroadcast, PrevLastBroadcast := now, now;
 
-  var heading, speed, pos := GetHeading(now), GetSpeed(now), GetPosition(now);
+  var heading, speed, pos := GetHeading(j,now), GetSpeed(j,now), GetPosition(j,now);
   var prevheading, prevspeed, prevpos, statechanged := -1, -1, -1, false;
 
-  var seqno := 0;
+  //var seqno := 0;
   msgs := [];
   var prevsent := msgs;
 
@@ -90,7 +91,7 @@ method sendCAM(T_CheckCamGen:int, T_GenCam_DCC:int, j: int) returns (msgs:seq<CA
   invariant now > 0 ==> T_GenCam_DCC <= LastBroadcast - PrevLastBroadcast <= T_GenCamMax;
   
   // Message sent conditions (don't test when entering the loop)
-  invariant now > 0 ==> CAM(j,seqno,now,heading,speed,pos) in msgs;
+  invariant now > 0 ==> CAM(j,now,heading,speed,pos) in msgs;
   invariant now > 0 ==> |prevsent| + 1 == |msgs|;
 
   invariant |msgs| >= 2 ==> forall i: int :: 1 <= i < |msgs| ==> T_GenCam_DCC <= (msgs[i].time - msgs[i-1].time) <= T_GenCamMax;
@@ -111,7 +112,7 @@ method sendCAM(T_CheckCamGen:int, T_GenCam_DCC:int, j: int) returns (msgs:seq<CA
     invariant now - LastBroadcast <= max(T_GenCam_DCC, T_GenCam);
     {
         // Get vehicle information
-        heading, speed, pos := GetHeading(now), GetSpeed(now), GetPosition(now);
+        heading, speed, pos := GetHeading(j,now), GetSpeed(j,now), GetPosition(j,now);
       
         // Check if this information has changed
         statechanged := abs(heading - prevheading) >= headingthreshold ||
@@ -130,8 +131,8 @@ method sendCAM(T_CheckCamGen:int, T_GenCam_DCC:int, j: int) returns (msgs:seq<CA
 
     assert LastBroadcast + T_GenCam_DCC <= now <= LastBroadcast + T_GenCamMax;
     
-    seqno := (seqno + 1) % 256;
-    msgs := msgs + [CAM(j,seqno,now,heading,speed,pos)];
+  //  seqno := (seqno + 1) % 256;
+    msgs := msgs + [CAM(j,now,heading,speed,pos)];
     
     if (statechanged) { // Trigger 1
       T_GenCamNext := now - LastBroadcast;
@@ -150,25 +151,23 @@ method sendCAM(T_CheckCamGen:int, T_GenCam_DCC:int, j: int) returns (msgs:seq<CA
   }
   return msgs, now;
 }
-method receiveCAM(fromid:int, cams:seq<CAM>) returns ()
+method receiveCAM(k:int,fromid:int, cams:seq<CAM>, now:int) returns (brake:bool)
 requires 0 <= fromid < |cams|;
 requires fromid == cams[fromid].id;  //To check that the vehicle the message claims it was sent from was actually sent from that vehicle.
-{
-  var now := Now();
-  if(Sign(Magnitude(cams[fromid].heading)) == - Sign(Magnitude(GetHeading(now))))
+ensures Sign(Magnitude(cams[fromid].heading)) == Sign(Magnitude(GetHeading(k,now))) && GetSpeed(k,now) - cams[fromid].speed < 0 ==> brake; //ensures that we hit the brakes if the vehicle in front is slowing down
+{ 
+  var speeddiff, deceleration, newspeed := 0,0,0;
+  if(Sign(Magnitude(cams[fromid].heading)) == Sign(Magnitude(GetHeading(k,now)))) //if they are heading in the same direction
   {
-    //Ignore cars travelling in the opposite direction to us
-  }
- var speeddiff := GetSpeed(now) - cams[fromid].speed;
+    speeddiff := GetSpeed(k,now) - cams[fromid].speed;//calculate the speed difference
 
- //Negative speeddiff indicates that we are getting closer to the vehicle ahead of us so we may need to brake
- if (speeddiff < 0){
-     var deceleration := Brake(cams[fromid].speed);
-     var newspeed := cams[fromid].speed - deceleration;
+    if (speeddiff < 0){ //if the vehicle ahead is slowing down
+     deceleration := Brake(cams[fromid].speed); 
+     newspeed := cams[fromid].speed - deceleration;
+     brake:=true;
+    }
   }
- 
 }
-
 //helper functions and methods are below
 
 method Now() returns(n:int)
@@ -176,17 +175,17 @@ method Now() returns(n:int)
   //returns the current time
 }
 
-function method GetHeading(now: int) :int
+function method GetHeading(carid:int, now: int) :int
 {
   20
 }
 
-function method GetSpeed(now: int):int
+function method GetSpeed(carid:int, now: int):int
 {
   50
 }
 
-function method GetPosition(now: int):int
+function method GetPosition(carid:int, now: int):int
 {
   10
 }
@@ -225,15 +224,3 @@ function method max(x: int, y: int): int
 }
 
  
-method sqrt (s:int) returns (r:int)
-requires s >= 0;
-ensures 0 <= r * r && r*r <= s && s < (r+1)*(r+1); 
-{
-  r := 0 ;
-  while ((r+1) * (r+1) <= s)
-  decreases s - (r+1) * (r+1);
-  invariant r*r <= s ;
-  {
-    r := r+1 ;
-  }
-}
