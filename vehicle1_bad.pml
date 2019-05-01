@@ -94,9 +94,9 @@ proctype attacker(chan l_in, t_in)   /* attackder */
 
 init
 {
-  clock = 0; printf("Starting 0\n");
   chan v1tov2 = [10] of { int };
   chan v3tov2 = [10] of { int };
+  clock = 0; printf("Starting 0\n");
   run leader(0, v1tov2); run vehicle(1, v1tov2, v3tov2); run tail(2, v3tov2);
   run attacker(v1tov2, v3tov2)
 }  

@@ -10,6 +10,13 @@ int lspeed = 0;
 int vspeed = 0;
 int tspeed = 0;
 
+init
+{
+  chan v1tov2 = [10] of { int };
+  chan v3tov2 = [10] of { int };
+  clock = 0; printf("Starting 0\n");
+  run leader(0, v1tov2); run vehicle(1, v1tov2, v3tov2); run tail(2, v3tov2)
+}  
 proctype leader(int vnum; chan out)  /* leader vehicle */
 {
    printf("leader: starting\n"); 
@@ -77,13 +84,7 @@ proctype tail(int vnum; chan out)  /* tail vehicle */
 	FIN: clock++; printf("tail: finishing\n")
 }
 
-init
-{
-  clock = 0; printf("Starting 0\n");
-  chan v1tov2 = [10] of { int };
-  chan v3tov2 = [10] of { int };
-  run leader(0, v1tov2); run vehicle(1, v1tov2, v3tov2); run tail(2, v3tov2)
-}  
+
 
 /* Original property: [](big_speed_difference => X ~ big_speed_difference)
    Never: <>(big_speed_difference & X big_speed_difference)
