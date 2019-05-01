@@ -26,9 +26,9 @@ proctype leader(int vnum; chan out)  /* leader vehicle */
        if
 	  :: (clock > 100) -> goto FIN
        	  :: (clock <= 100) ->
-	     	    out!(clock%5);
-		    lspeed=(clock%5);
-	     	    printf("leader: speed %d\n", (clock%5));		    
+	     	    out!(clock%6);
+		    lspeed=(clock%6);
+	     	    printf("leader: speed %d\n", (clock%6));		    
     		    clock++;
 		    goto L1
 	fi;
@@ -75,9 +75,9 @@ proctype tail(int vnum; chan out)  /* tail vehicle */
        if
 	  :: (clock > 100) -> goto FIN;
        	  :: (clock <= 100) ->
-	     	    out!(clock%5);
-		    tspeed=(clock%5);
-	     	    printf("tail: speed %d\n", (clock%5));		    
+	     	    out!(clock%6);
+		    tspeed=(clock%6);
+	     	    printf("tail: speed %d\n", (clock%6));		    
     		    clock++;
 		    goto T1
 	fi;
