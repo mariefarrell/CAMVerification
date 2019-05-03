@@ -48,7 +48,7 @@ method Main()
   var car3 := Car(3,0,100,4);
 }
 
-method sendCAM(T_CheckCamGen:int, T_GenCam_DCC:int, j: int) returns (msgs:seq<CAM>, now:int)
+method sendCAM(T_CheckCamGen:int, T_GenCam_DCC:int) returns (msgs:seq<CAM>, now:int)
   requires 0 < T_CheckCamGen <= T_GenCamMin;
   requires T_GenCamMin <= T_GenCam_DCC <= T_GenCamMax;
 
@@ -56,6 +56,7 @@ method sendCAM(T_CheckCamGen:int, T_GenCam_DCC:int, j: int) returns (msgs:seq<CA
   ensures |msgs| >= 2 ==> forall i: int :: 1 <= i < |msgs| ==> T_GenCam_DCC <= (msgs[i].time - msgs[i-1].time) <= T_GenCamMax;
   ensures |msgs| == MaxMsgs;
 {
+  var j := GetId();
   var T_GenCam := T_GenCamMax; // currently valid upper limit of the CAM generation interval
   var T_GenCamNext := T_GenCam;
   var N_GenCam := N_GenCamDefault;
@@ -154,16 +155,20 @@ method sendCAM(T_CheckCamGen:int, T_GenCam_DCC:int, j: int) returns (msgs:seq<CA
 method receiveCAM(k:int,fromid:int, cams:seq<CAM>, now:int) returns (brake:bool)
 requires 0 <= fromid < |cams|;
 requires fromid == cams[fromid].id;  //To check that the vehicle the message claims it was sent from was actually sent from that vehicle.
-ensures Sign(Magnitude(cams[fromid].heading)) == Sign(Magnitude(GetHeading(k,now))) && GetSpeed(k,now) - cams[fromid].speed < 0 ==> brake; //ensures that we hit the brakes if the vehicle in front is slowing down
+ensures !(now - cams[fromid].time > T_GenCamMax) && Sign(Magnitude(cams[fromid].heading)) == Sign(Magnitude(GetHeading(k,now))) && GetSpeed(k,now) - cams[fromid].speed < 0 ==> brake; //ensures that we hit the brakes if the vehicle in front is slowing down
+ensures now - cams[fromid].time > T_GenCamMax ==> !brake; // to avoid replay attacks
 { 
-  var speeddiff, deceleration, newspeed := 0,0,0;
-  if(Sign(Magnitude(cams[fromid].heading)) == Sign(Magnitude(GetHeading(k,now)))) //if they are heading in the same direction
+  var speeddiff := 0;
+
+  if (now -cams[fromid].time > T_GenCamMax){
+      brake := false;
+    }
+
+  else if(Sign(Magnitude(cams[fromid].heading)) == Sign(Magnitude(GetHeading(k,now)))) //if they are heading in the same direction
   {
     speeddiff := GetSpeed(k,now) - cams[fromid].speed;//calculate the speed difference
-
-    if (speeddiff < 0){ //if the vehicle ahead is slowing down
-     deceleration := Brake(cams[fromid].speed); 
-     newspeed := cams[fromid].speed - deceleration;
+    
+    if (speeddiff < 0){
      brake:=true;
     }
   }
@@ -173,6 +178,11 @@ ensures Sign(Magnitude(cams[fromid].heading)) == Sign(Magnitude(GetHeading(k,now
 method Now() returns(n:int)
 {
   //returns the current time
+}
+
+method GetId() returns (id:int)
+{
+  //returns the current vehicles id
 }
 
 function method GetHeading(carid:int, now: int) :int
@@ -223,4 +233,10 @@ function method max(x: int, y: int): int
   if x < y then y else x
 }
 
- 
+ /*
+ Some notes here:
+
+(1) is there a stronger non-repudiation property
+    - sender can't deny sending something that it has already sent == sender has sent the CAM if it claims to
+
+*/
