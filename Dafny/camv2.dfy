@@ -1,7 +1,3 @@
-//C = Confidentiality (Vehicles only receive messages intended for them)
-//I = Integrity (The contents of the received message are the same as when it was sent)
-//A = Availability (CAM messages are sent on time and arrive within some time bound)
-
 //Cooperative Awareness Messages (CAM) generation for vehicle j.
 //These are used to inform other vehicles of the current vehicle's state
 //CAM messages are intended for all that receive them so proving Confidentiality is unnecessary
@@ -38,7 +34,7 @@ method Main()
     c := c + 1;
     print c, ": ", |res|, " ", res, " @ ", now, "\n";
 
-    var rc := 1;    
+    var rc := 0;
     while (rc < carNos)
     decreases carNos - rc;
     {
@@ -202,16 +198,35 @@ method sendCAM(T_CheckCamGen:int, T_GenCam_DCC:int, j: int, start: int, max_msgs
   return msgs, now;
 }
 
-//assume vehicles are numbered sequentially i.e j-1 is in front of j and j+1 is after j
-//cams:sequence of cams available to the platoon
-method receiveCAM(j: int, now: int, cams:seq<CAM>) returns (brake:bool)
-requires |cams|>2;
+method receiveCAM(j: int, now: int, cams:seq<CAM>) returns (closer:seq<bool>)
+ensures |cams| == |closer|;
+{
+  closer := [];
+
+  while (|closer| < |cams|)
+  decreases |cams| - |closer|;
+  invariant 0 <= |closer| <= |cams|;
+  {
+    var i := |closer|;
+
+    var timediff := now - cams[i].time;
+    var dist := Distance(cams[i].position, GetPosition(j, now));
+
+    var dist_early := dist + GetSpeed(j, now) * -timediff;
+    var dist_now := dist + cams[i].speed * timediff;
+
+    closer := closer + [dist_now < dist_early]; // Record if getting closer
+  }
+}
+
+method receiveCAM2(j: int, now: int, cams:seq<CAM>) returns (brake:bool)
+requires |cams| > 2;
 requires 0 < j < |cams|;
-ensures (GetSpeed(j, now) > cams[j-1].speed && now - cams[j-1].time <=T_GenCamMax) ==> brake;
+ensures (GetSpeed(j, now) > cams[j-1].speed && now - cams[j-1].time <= T_GenCamMax) ==> brake;
 ensures (now - cams[j-1].time > T_GenCamMax && GetPosition(j-1,now) - GetPosition(j, now) < 10) ==> brake;
 {
   brake := false;
-  if(GetSpeed(j, now) > cams[j-1].speed && now - cams[j-1].time <=T_GenCamMax)
+  if(GetSpeed(j, now) > cams[j-1].speed && now - cams[j-1].time <= T_GenCamMax)
   {
       brake := true;
   }
@@ -224,6 +239,91 @@ ensures (now - cams[j-1].time > T_GenCamMax && GetPosition(j-1,now) - GetPositio
     }
   }
 }
+
+/*function method StoppingDistance(j: int, now: int, speed: int, friction_coeff: float) : int
+{
+  // Assume g = 9.8
+  ((speed * speed) / (2 * 9.8 * friction_coeff)) as int
+}*/
+
+const Deceleration : real := 4.5; // m/s
+
+function method TimeToStop(j: int, now: int) : real
+{
+  GetSpeed(j, now) as real / Deceleration
+}
+
+function method InterpolateDistanceNow(j: int, now: int, c: CAM) : int
+{
+  Distance(c.position, GetPosition(j, now)) + c.speed * (now - c.time)
+}
+function method InterpolateDistanceEarly(j: int, now: int, c: CAM) : int
+{
+  Distance(c.position, GetPosition(j, now)) + GetSpeed(j, now) * -(now - c.time)
+}
+
+function method TimeToCollision(j: int, now: int, c: CAM) : real
+  requires now > c.time
+{
+  var timediff := now - c.time;
+  var dist_early := InterpolateDistanceEarly(j, now, c);
+  var dist_now := InterpolateDistanceNow(j, now, c);
+
+  (dist_now - dist_early) as real / timediff as real
+}
+
+method receiveCAM3(j: int, now: int, cams:seq<CAM>, TimeToStopFactor: real) returns (brake:bool)
+requires forall i : int :: 0 <= i < |cams| ==> cams[i].time < now;
+requires TimeToStopFactor >= 1.0;
+ensures brake == exists i : int :: 0 <= i < |cams| && TimeToStop(j, now) * TimeToStopFactor <= TimeToCollision(j, now, cams[i]);
+{
+  var i := 0;
+
+  brake := false;
+
+  while (i < |cams|)
+  decreases |cams| - i;
+  invariant 0 <= i <= |cams|;
+  invariant brake == exists k : int :: 0 <= k < i && TimeToStop(j, now) * TimeToStopFactor <= TimeToCollision(j, now, cams[k]);
+  {
+    brake := brake || TimeToStop(j, now) * TimeToStopFactor <= TimeToCollision(j, now, cams[i]);
+
+    i := i + 1;
+  }
+}
+
+method receiveCAM4(j: int, now: int, cams:seq<CAM>, TimeToStopFactor: real, HeadingVariance: int) returns (brake:bool) 
+requires |cams|>0;
+requires forall i : int :: 0 <= i < |cams| ==> cams[i].time < now;
+requires TimeToStopFactor >= 1.0;
+requires HeadingVariance >= 0;
+ensures brake == exists k : int :: 0 <= k < |cams| && (abs(GetHeading(j, now) - cams[k].heading) <= HeadingVariance)
+  && (now - cams[k].time <= T_GenCamMax || Distance(GetPosition(cams[k].id, now), GetPosition(j, now)) < 10)
+  && TimeToStop(j, now) * TimeToStopFactor <= TimeToCollision(j, now, cams[k]);
+{
+  var i := 0;
+
+  brake := false;
+
+  while (i < |cams|)
+  decreases |cams| - i;
+  invariant 0 <= i <= |cams|;
+  invariant  brake == exists k : int :: 0 <= k < i && (abs(GetHeading(j, now) - cams[k].heading) <= HeadingVariance) 
+    && (now - cams[k].time <= T_GenCamMax || Distance(GetPosition(cams[k].id, now), GetPosition(j, now)) < 10) 
+    && TimeToStop(j, now) * TimeToStopFactor <= TimeToCollision(j, now, cams[k]);
+  {
+    if(abs(GetHeading(j, now) - cams[i].heading) <= HeadingVariance)//if going in a similar direction
+    {
+      if(now - cams[i].time <= T_GenCamMax || //if the cam is recent enough
+         Distance(GetPosition(cams[i].id, now), GetPosition(j, now)) < 10) //or if the cam is not recent enough then check the sensors
+      {
+        brake := brake || TimeToStop(j, now) * TimeToStopFactor <= TimeToCollision(j, now, cams[i]);
+      }
+    } 
+    i := i + 1;
+  }
+}
+
 
 //helper functions and methods are below
 
